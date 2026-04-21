@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Tuple
+from typing import Dict
 
 import torch
 import torch.nn.functional as F
@@ -14,35 +13,7 @@ from anti_chimera.data.manifest import ManifestVideoDataset
 from anti_chimera.data.scene_hint import SceneHintBuilder
 from anti_chimera.data.synthetic_collision import SyntheticCollisionDataset
 from anti_chimera.models.model import AntiChimeraVideoDiffusion
-from anti_chimera.utils import cosine_beta_schedule, default_device, ensure_dir, normalize_video, save_gif
-
-
-@dataclass
-class DiffusionSchedule:
-    betas: torch.Tensor
-    alphas: torch.Tensor
-    alphas_cumprod: torch.Tensor
-    sqrt_alphas_cumprod: torch.Tensor
-    sqrt_one_minus_alphas_cumprod: torch.Tensor
-
-
-def make_schedule(num_steps: int, device: torch.device) -> DiffusionSchedule:
-    betas = cosine_beta_schedule(num_steps).to(device)
-    alphas = 1.0 - betas
-    alphas_cumprod = torch.cumprod(alphas, dim=0)
-    return DiffusionSchedule(
-        betas=betas,
-        alphas=alphas,
-        alphas_cumprod=alphas_cumprod,
-        sqrt_alphas_cumprod=torch.sqrt(alphas_cumprod),
-        sqrt_one_minus_alphas_cumprod=torch.sqrt(1.0 - alphas_cumprod),
-    )
-
-
-def q_sample(x0: torch.Tensor, t: torch.Tensor, noise: torch.Tensor, schedule: DiffusionSchedule) -> torch.Tensor:
-    a = schedule.sqrt_alphas_cumprod[t][:, None, None, None, None]
-    b = schedule.sqrt_one_minus_alphas_cumprod[t][:, None, None, None, None]
-    return a * x0 + b * noise
+from anti_chimera.utils import default_device, ensure_dir, normalize_video, save_gif
 
 
 def collate_fn(batch):
@@ -132,14 +103,14 @@ def train(config: Dict) -> None:
         image_size=data_cfg['image_size'],
     )
     cond_channels = data_cfg['max_objects'] + data_cfg['depth_bins'] + data_cfg['max_objects']
-    model = AntiChimeraVideoDiffusion(
-        cond_channels=cond_channels,
-        **model_cfg,
-    ).to(device)
+    model = AntiChimeraVideoDiffusion(cond_channels=cond_channels, **model_cfg).to(device)
 
-    optimizer = torch.optim.AdamW(model.parameters(), lr=train_cfg['lr'], weight_decay=train_cfg['weight_decay'])
+    optimizer = torch.optim.AdamW(
+        [p for p in model.parameters() if p.requires_grad],
+        lr=train_cfg['lr'],
+        weight_decay=train_cfg['weight_decay'],
+    )
     scaler = GradScaler(enabled=bool(train_cfg['amp']) and device.type == 'cuda')
-    schedule = make_schedule(config['sampling']['num_steps'], device)
 
     for epoch in range(1, train_cfg['epochs'] + 1):
         model.train()
@@ -148,14 +119,17 @@ def train(config: Dict) -> None:
             videos = normalize_video(batch['video'].float().to(device))
             prompts = batch['caption']
             cond = build_batch_cond(batch, builder).float().to(device)
-            B = videos.shape[0]
-            t = torch.randint(0, config['sampling']['num_steps'], (B,), device=device)
-            noise = torch.randn_like(videos)
-            x_t = q_sample(videos, t, noise, schedule)
+            with torch.no_grad():
+                latents = model.encode_video(videos)
+            B = latents.shape[0]
+            t = torch.randint(0, model.num_train_timesteps, (B,), device=device, dtype=torch.long)
+            noise = torch.randn_like(latents)
+            noisy_latents = model.add_noise(latents, noise, t)
+            target = model.prediction_target(latents, noise, t)
             optimizer.zero_grad(set_to_none=True)
             with autocast(enabled=bool(train_cfg['amp']) and device.type == 'cuda'):
-                pred = model(x_t, t, prompts, cond)
-                loss = F.mse_loss(pred, noise)
+                pred = model(noisy_latents, t, prompts, cond)
+                loss = F.mse_loss(pred, target)
             scaler.scale(loss).backward()
             if train_cfg['grad_clip'] is not None:
                 scaler.unscale_(optimizer)
