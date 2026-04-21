@@ -6,6 +6,7 @@ from typing import List
 
 import torch
 import torch.nn as nn
+from transformers import AutoModel, AutoTokenizer
 
 TOKEN_RE = re.compile(r"[a-zA-Z']+")
 
@@ -21,7 +22,7 @@ class PromptParser:
         self.stopwords = {
             'a', 'an', 'the', 'and', 'on', 'in', 'with', 'near', 'at', 'of', 'two', 'three'
         }
-        self.entity_heads = {'circle', 'square', 'triangle', 'object'}
+        self.entity_heads = {'circle', 'square', 'triangle', 'object', 'cat', 'dog', 'person'}
 
     def parse(self, prompt: str) -> ParsedPrompt:
         words = [w.lower() for w in TOKEN_RE.findall(prompt)]
@@ -38,28 +39,31 @@ class PromptParser:
         return ParsedPrompt(tokens=words, entities=entities)
 
 
-class TokenTextEncoder(nn.Module):
-    def __init__(self, vocab_size: int, embed_dim: int) -> None:
+class HFTextEncoder(nn.Module):
+    def __init__(self, model_name_or_path: str, freeze: bool = True) -> None:
         super().__init__()
-        self.vocab_size = vocab_size
-        self.embedding = nn.Embedding(vocab_size, embed_dim)
-        self.proj = nn.Sequential(
-            nn.Linear(embed_dim, embed_dim),
-            nn.SiLU(),
-            nn.Linear(embed_dim, embed_dim),
+        self.tokenizer = AutoTokenizer.from_pretrained(model_name_or_path)
+        self.model = AutoModel.from_pretrained(model_name_or_path)
+        if freeze:
+            self.model.requires_grad_(False)
+            self.model.eval()
+
+    @property
+    def hidden_size(self) -> int:
+        return int(self.model.config.hidden_size)
+
+    def forward(self, prompts: List[str], device: torch.device) -> torch.Tensor:
+        encoded = self.tokenizer(
+            prompts,
+            padding=True,
+            truncation=True,
+            return_tensors='pt',
+            max_length=min(getattr(self.tokenizer, 'model_max_length', 77), 77),
         )
-
-    def _hash_token(self, token: str) -> int:
-        return abs(hash(token)) % self.vocab_size
-
-    def forward(self, prompts: List[str]) -> torch.Tensor:
-        device = self.embedding.weight.device
-        batch_embeddings = []
-        for prompt in prompts:
-            tokens = [t.lower() for t in TOKEN_RE.findall(prompt)]
-            if not tokens:
-                tokens = ['empty']
-            ids = torch.tensor([self._hash_token(t) for t in tokens], device=device)
-            emb = self.embedding(ids).mean(dim=0)
-            batch_embeddings.append(emb)
-        return self.proj(torch.stack(batch_embeddings, dim=0))
+        encoded = {k: v.to(device) for k, v in encoded.items()}
+        outputs = self.model(**encoded)
+        if hasattr(outputs, 'last_hidden_state'):
+            return outputs.last_hidden_state
+        if isinstance(outputs, tuple) and len(outputs) > 0:
+            return outputs[0]
+        raise RuntimeError('Unsupported transformer text encoder output.')
