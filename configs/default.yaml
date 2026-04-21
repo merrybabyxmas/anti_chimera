@@ -2,8 +2,13 @@ seed: 42
 output_dir: outputs
 
 data:
+  type: manifest
+  manifest_path: data/train.jsonl
+  val_manifest_path: data/val.jsonl
+  root_dir: .
+  synthetic_fallback: true
   num_frames: 12
-  image_size: 32
+  image_size: 64
   max_objects: 3
   depth_bins: 4
   train_size: 20000
@@ -11,19 +16,28 @@ data:
   vocab_size: 256
 
 model:
+  backend: diffusers_unet3d
+  pretrained_model_name_or_path: null
+  unet_subfolder: unet
+  text_encoder_name_or_path: openai/clip-vit-base-patch32
+  tokenizer_name_or_path: openai/clip-vit-base-patch32
+  freeze_text_encoder: true
+  in_channels: 3
   base_channels: 32
   channel_multipliers: [1, 2, 4]
   time_embed_dim: 256
   text_embed_dim: 128
-  scene_embed_dim: 128
+  cross_attention_dim: 512
+  attention_head_dim: 8
+  layers_per_block: 1
   cond_channels: 32
   dropout: 0.1
 
 training:
-  batch_size: 8
+  batch_size: 4
   num_workers: 0
   epochs: 10
-  lr: 0.0002
+  lr: 0.0001
   weight_decay: 0.0
   grad_clip: 1.0
   log_every: 50
