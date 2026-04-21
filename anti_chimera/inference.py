@@ -1,13 +1,11 @@
 from __future__ import annotations
 
-from typing import Dict, List
+from typing import Dict
 
 import torch
 
 from anti_chimera.data.scene_hint import SceneHintBuilder
 from anti_chimera.text import PromptParser
-from anti_chimera.trainer import DiffusionSchedule, make_schedule
-from anti_chimera.utils import denormalize_video
 
 
 def build_null_condition(prompt: str, config: Dict, device: torch.device) -> torch.Tensor:
@@ -42,27 +40,35 @@ def build_null_condition(prompt: str, config: Dict, device: torch.device) -> tor
     return cond
 
 
-def p_sample(model, x, t, prompts: List[str], cond, schedule: DiffusionSchedule):
-    betas_t = schedule.betas[t][:, None, None, None, None]
-    sqrt_one_minus = schedule.sqrt_one_minus_alphas_cumprod[t][:, None, None, None, None]
-    sqrt_recip_alpha = (1.0 / torch.sqrt(schedule.alphas[t]))[:, None, None, None, None]
-    pred_noise = model(x, t, prompts, cond)
-    model_mean = sqrt_recip_alpha * (x - betas_t * pred_noise / sqrt_one_minus)
-    if (t == 0).all():
-        return model_mean
-    noise = torch.randn_like(x)
-    posterior_var = betas_t
-    return model_mean + torch.sqrt(posterior_var) * noise
-
-
+@torch.no_grad()
 def sample_video(model, prompt: str, config: Dict, device: torch.device) -> torch.Tensor:
     model.eval()
     data_cfg = config['data']
     sampling_cfg = config['sampling']
-    x = torch.randn(1, 3, data_cfg['num_frames'], data_cfg['image_size'], data_cfg['image_size'], device=device)
     cond = build_null_condition(prompt, config, device)
-    schedule = make_schedule(sampling_cfg['num_steps'], device)
-    for step in reversed(range(sampling_cfg['num_steps'])):
-        t = torch.full((1,), step, device=device, dtype=torch.long)
-        x = p_sample(model, x, t, [prompt], cond, schedule)
-    return denormalize_video(x[0].detach().cpu())
+
+    num_steps = int(sampling_cfg['num_steps'])
+    if hasattr(model.scheduler, 'set_timesteps'):
+        model.scheduler.set_timesteps(num_steps, device=device)
+        timesteps = model.scheduler.timesteps
+    else:
+        timesteps = torch.arange(num_steps - 1, -1, -1, device=device)
+
+    latent_shape = model.infer_latent_shape(
+        num_frames=data_cfg['num_frames'],
+        height=data_cfg['image_size'],
+        width=data_cfg['image_size'],
+        device=device,
+    )
+    latents = torch.randn(latent_shape, device=device, dtype=next(model.parameters()).dtype)
+
+    for timestep in timesteps:
+        t = timestep if torch.is_tensor(timestep) else torch.tensor(timestep, device=device)
+        t_batch = t.reshape(1).long()
+        noise_pred = model(latents, t_batch, [prompt], cond)
+        step_out = model.scheduler.step(noise_pred, t, latents)
+        latents = step_out.prev_sample if hasattr(step_out, 'prev_sample') else step_out[0]
+
+    video = model.decode_latents(latents)
+    video = ((video[0].detach().cpu() + 1.0) * 0.5).clamp(0.0, 1.0)
+    return video
