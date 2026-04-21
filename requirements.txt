@@ -5,3 +5,7 @@ imageio>=2.33.0
 imageio-ffmpeg>=0.4.9
 pillow>=10.0.0
 tqdm>=4.66.0
+diffusers>=0.31.0
+transformers>=4.44.0
+accelerate>=0.34.0
+torchvision>=0.16.0
