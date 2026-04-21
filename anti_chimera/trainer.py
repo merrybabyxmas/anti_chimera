@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict
+from pathlib import Path
+from typing import Dict, Tuple
 
 import torch
 import torch.nn.functional as F
@@ -9,6 +10,7 @@ from torch.cuda.amp import GradScaler, autocast
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
+from anti_chimera.data.manifest import ManifestVideoDataset
 from anti_chimera.data.scene_hint import SceneHintBuilder
 from anti_chimera.data.synthetic_collision import SyntheticCollisionDataset
 from anti_chimera.models.model import AntiChimeraVideoDiffusion
@@ -67,15 +69,31 @@ def build_batch_cond(batch: Dict, builder: SceneHintBuilder) -> torch.Tensor:
     return torch.stack(conds, dim=0)
 
 
-def train(config: Dict) -> None:
-    device = default_device(config['training']['device'])
-    out_dir = ensure_dir(config['output_dir'])
-    ckpt_dir = ensure_dir(out_dir / 'checkpoints')
-    sample_dir = ensure_dir(out_dir / 'train_samples')
-
+def build_datasets(config: Dict):
     data_cfg = config['data']
-    model_cfg = config['model']
-    train_cfg = config['training']
+    data_type = str(data_cfg.get('type', 'manifest'))
+    if data_type == 'manifest' and Path(data_cfg['manifest_path']).exists():
+        train_ds = ManifestVideoDataset(
+            manifest_path=data_cfg['manifest_path'],
+            root_dir=data_cfg.get('root_dir', '.'),
+            num_frames=data_cfg['num_frames'],
+            image_size=data_cfg['image_size'],
+            max_objects=data_cfg['max_objects'],
+        )
+        val_manifest = data_cfg.get('val_manifest_path') or data_cfg['manifest_path']
+        val_ds = ManifestVideoDataset(
+            manifest_path=val_manifest,
+            root_dir=data_cfg.get('root_dir', '.'),
+            num_frames=data_cfg['num_frames'],
+            image_size=data_cfg['image_size'],
+            max_objects=data_cfg['max_objects'],
+        )
+        return train_ds, val_ds
+
+    if not data_cfg.get('synthetic_fallback', True):
+        raise FileNotFoundError(
+            f"Manifest dataset not found at {data_cfg['manifest_path']}. Set data.synthetic_fallback=true or provide a manifest."
+        )
 
     train_ds = SyntheticCollisionDataset(
         size=data_cfg['train_size'],
@@ -91,6 +109,20 @@ def train(config: Dict) -> None:
         max_objects=data_cfg['max_objects'],
         seed=config['seed'] + 1,
     )
+    return train_ds, val_ds
+
+
+def train(config: Dict) -> None:
+    device = default_device(config['training']['device'])
+    out_dir = ensure_dir(config['output_dir'])
+    ckpt_dir = ensure_dir(out_dir / 'checkpoints')
+    sample_dir = ensure_dir(out_dir / 'train_samples')
+
+    data_cfg = config['data']
+    model_cfg = config['model']
+    train_cfg = config['training']
+
+    train_ds, val_ds = build_datasets(config)
     train_loader = DataLoader(train_ds, batch_size=train_cfg['batch_size'], shuffle=True, num_workers=train_cfg['num_workers'], collate_fn=collate_fn)
     val_loader = DataLoader(val_ds, batch_size=train_cfg['batch_size'], shuffle=False, num_workers=train_cfg['num_workers'], collate_fn=collate_fn)
 
@@ -101,14 +133,8 @@ def train(config: Dict) -> None:
     )
     cond_channels = data_cfg['max_objects'] + data_cfg['depth_bins'] + data_cfg['max_objects']
     model = AntiChimeraVideoDiffusion(
-        in_channels=3,
         cond_channels=cond_channels,
-        vocab_size=data_cfg['vocab_size'],
-        base_channels=model_cfg['base_channels'],
-        channel_multipliers=model_cfg['channel_multipliers'],
-        time_embed_dim=model_cfg['time_embed_dim'],
-        text_embed_dim=model_cfg['text_embed_dim'],
-        dropout=model_cfg['dropout'],
+        **model_cfg,
     ).to(device)
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=train_cfg['lr'], weight_decay=train_cfg['weight_decay'])
