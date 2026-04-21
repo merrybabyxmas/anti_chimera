@@ -1,0 +1,36 @@
+seed: 42
+output_dir: outputs
+
+data:
+  num_frames: 12
+  image_size: 32
+  max_objects: 3
+  depth_bins: 4
+  train_size: 20000
+  val_size: 256
+  vocab_size: 256
+
+model:
+  base_channels: 32
+  channel_multipliers: [1, 2, 4]
+  time_embed_dim: 256
+  text_embed_dim: 128
+  scene_embed_dim: 128
+  cond_channels: 32
+  dropout: 0.1
+
+training:
+  batch_size: 8
+  num_workers: 0
+  epochs: 10
+  lr: 0.0002
+  weight_decay: 0.0
+  grad_clip: 1.0
+  log_every: 50
+  save_every: 1
+  amp: false
+  device: cuda
+
+sampling:
+  num_steps: 50
+  guidance_scale: 1.5
