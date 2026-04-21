@@ -1,0 +1,44 @@
+seed: 42
+output_dir: outputs/cogvideox_2b
+
+data:
+  type: manifest
+  manifest_path: data/train.jsonl
+  val_manifest_path: data/val.jsonl
+  root_dir: .
+  synthetic_fallback: true
+  num_frames: 12
+  image_size: 64
+  max_objects: 3
+  depth_bins: 4
+  train_size: 20000
+  val_size: 256
+  vocab_size: 256
+
+model:
+  backend: cogvideox
+  variant: 2b
+  pretrained_model_name_or_path: /path/to/cogvideox-2b
+  transformer_subfolder: transformer
+  tokenizer_subfolder: tokenizer
+  text_encoder_subfolder: text_encoder
+  vae_subfolder: vae
+  scheduler_subfolder: scheduler
+  freeze_text_encoder: true
+  freeze_vae: true
+
+training:
+  batch_size: 1
+  num_workers: 0
+  epochs: 10
+  lr: 0.0001
+  weight_decay: 0.0
+  grad_clip: 1.0
+  log_every: 50
+  save_every: 1
+  amp: false
+  device: cuda
+
+sampling:
+  num_steps: 50
+  guidance_scale: 1.5
