@@ -1,40 +1,44 @@
 # anti_chimera
 
-A runnable research scaffold for chimera-resistant video diffusion using **only the standard diffusion denoising loss**.
+A runnable research scaffold for chimera-resistant video diffusion using the standard diffusion denoising loss.
 
-This repository provides:
-- an on-the-fly synthetic multi-entity collision dataset
-- a unified scene-hint builder (entity grounding + depth bins + visibility)
-- an object-centric scene injector
-- a compact 3D video denoiser
-- training and sampling scripts that run end-to-end
+## Reuse-first design
 
-## What this is
+This repository now prefers **reuse over scratch**.
 
-This is a **minimal executable research codebase** implementing the core idea:
+- backbone: `diffusers.UNet3DConditionModel`
+- text encoder: Hugging Face `transformers`
+- data pipeline: manifest adapter for existing video datasets
+- synthetic data: fallback smoke-test path only
 
-> Keep the diffusion loss simple, and reduce chimera artifacts by changing the conditioning pathway rather than adding extra task-specific losses.
+## Included components
 
-The code is intentionally lightweight so that training and inference can be run immediately on a single GPU or even on CPU at very small settings.
+- manifest-based dataset loading for existing videos
+- optional sidecar loading for tracks / depth / visibility arrays
+- unified scene-hint builder
+- scene-conditioned wrapper around a diffusers 3D UNet
+- train / sample scripts
+- synthetic fallback dataset
 
-## Project layout
+## Layout
 
 ```text
 anti_chimera/
   data/
-    synthetic_collision.py   # on-the-fly synthetic videos with collisions/occlusions
-    scene_hint.py            # unified condition builder
+    manifest.py
+    synthetic_collision.py
+    scene_hint.py
   models/
-    modules.py               # shared blocks
-    model.py                 # scene-injected video denoiser
-  config.py                  # config loading
-  trainer.py                 # train loop
-  inference.py               # DDPM sampling
-  text.py                    # prompt tokenizer/encoder
-  utils.py                   # misc utilities
+    model.py
+  config.py
+  trainer.py
+  inference.py
+  text.py
+  utils.py
 configs/
   default.yaml
 scripts/
+  build_manifest.py
   train.py
   sample.py
 ```
@@ -47,11 +51,39 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
+## Build a manifest
+
+CSV format:
+
+```text
+video,caption
+clips/0001.mp4,"a white cat and a black cat fighting"
+clips/0002.mp4,"two people crossing each other"
+```
+
+Build JSONL manifest:
+
+```bash
+python scripts/build_manifest.py \
+  --video-root /path/to/videos \
+  --captions /path/to/captions.csv \
+  --out data/train.jsonl
+```
+
+Optional sidecars under `--sidecar-root`:
+- `*_tracks.npy`
+- `*_depth.npy`
+- `*_visibility.npy`
+
 ## Train
+
+Set `data.manifest_path` in `configs/default.yaml`.
 
 ```bash
 python scripts/train.py --config configs/default.yaml
 ```
+
+If no manifest exists and `data.synthetic_fallback=true`, training falls back to the lightweight synthetic dataset.
 
 ## Sample
 
@@ -59,13 +91,20 @@ python scripts/train.py --config configs/default.yaml
 python scripts/sample.py \
   --config configs/default.yaml \
   --checkpoint outputs/checkpoints/last.pt \
-  --prompt "a white circle and a black circle colliding" \
+  --prompt "a white cat and a black cat colliding" \
   --out outputs/samples/sample.gif
 ```
 
-## Notes
+## Backbone modes
 
-- The synthetic dataset uses simple colored objects and motion templates so the code is fully self-contained.
-- Scene hints are built with a **single unified pipeline** for every sample.
-- The training objective is **standard diffusion MSE only**.
-- This scaffold is deliberately compact. It is designed to be the shortest path to a working prototype, not a full-scale pretrained T2V system.
+To reuse a pretrained diffusers UNet, set:
+
+```yaml
+model:
+  backend: diffusers_unet3d
+  pretrained_model_name_or_path: /path/to/model-or-hf-id
+  unet_subfolder: unet
+  text_encoder_name_or_path: openai/clip-vit-base-patch32
+```
+
+If `pretrained_model_name_or_path: null`, the code still uses a diffusers UNet class, but without pretrained weights.
