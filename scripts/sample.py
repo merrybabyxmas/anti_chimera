@@ -23,16 +23,7 @@ def main() -> None:
     data_cfg = config['data']
     model_cfg = config['model']
     cond_channels = data_cfg['max_objects'] + data_cfg['depth_bins'] + data_cfg['max_objects']
-    model = AntiChimeraVideoDiffusion(
-        in_channels=3,
-        cond_channels=cond_channels,
-        vocab_size=data_cfg['vocab_size'],
-        base_channels=model_cfg['base_channels'],
-        channel_multipliers=model_cfg['channel_multipliers'],
-        time_embed_dim=model_cfg['time_embed_dim'],
-        text_embed_dim=model_cfg['text_embed_dim'],
-        dropout=model_cfg['dropout'],
-    ).to(device)
+    model = AntiChimeraVideoDiffusion(cond_channels=cond_channels, **model_cfg).to(device)
     ckpt = torch.load(args.checkpoint, map_location=device)
     model.load_state_dict(ckpt['model'])
     video = sample_video(model, args.prompt, config, device)
