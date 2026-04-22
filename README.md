@@ -29,6 +29,7 @@ This repository prefers reuse over scratch.
 - unified scene-hint builder
 - scene-conditioned CogVideoX wrapper
 - train / sample scripts
+- environment doctor script
 - synthetic fallback dataset
 
 ## Layout
@@ -52,6 +53,7 @@ configs/
   cogvideox_5b.yaml
 scripts/
   build_manifest.py
+  doctor.py
   train.py
   sample.py
 ```
@@ -62,9 +64,18 @@ scripts/
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
+pip install -e .
 ```
 
-## Build a manifest
+The editable install avoids the earlier `ModuleNotFoundError: anti_chimera` issue.
+
+## Environment check
+
+```bash
+python scripts/doctor.py
+```
+
+## Build manifests
 
 CSV format:
 
@@ -74,13 +85,25 @@ clips/0001.mp4,"a white cat and a black cat fighting"
 clips/0002.mp4,"two people crossing each other"
 ```
 
-Build JSONL manifest:
+### Single manifest
 
 ```bash
 python scripts/build_manifest.py \
   --video-root /path/to/videos \
   --captions /path/to/captions.csv \
   --out data/train.jsonl
+```
+
+### Train / validation split in one command
+
+```bash
+python scripts/build_manifest.py \
+  --video-root /path/to/videos \
+  --captions /path/to/captions.csv \
+  --train-out data/train.jsonl \
+  --val-out data/val.jsonl \
+  --val-ratio 0.1 \
+  --seed 42
 ```
 
 Optional sidecars under `--sidecar-root`:
