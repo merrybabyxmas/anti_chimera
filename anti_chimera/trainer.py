@@ -16,17 +16,23 @@ from anti_chimera.data.manifest import ManifestVideoDataset
 from anti_chimera.data.scene_hint import SceneHintBuilder
 from anti_chimera.data.synthetic_collision import SyntheticCollisionDataset
 from anti_chimera.inference import sample_video
+from anti_chimera.metrics import compute_chimera_metrics
 from anti_chimera.models.model import AntiChimeraVideoDiffusion
 from anti_chimera.utils import default_device, ensure_dir, normalize_video, save_gif, save_video_png
 
 
 def collate_fn(batch):
-    videos = torch.stack([item['video'] for item in batch])
-    captions = [item['caption'] for item in batch]
-    tracks = torch.stack([item['tracks'] for item in batch])
-    depth = torch.stack([item['depth'] for item in batch])
-    visibility = torch.stack([item['visibility'] for item in batch])
-    return {'video': videos, 'caption': captions, 'tracks': tracks, 'depth': depth, 'visibility': visibility}
+    out = {
+        'video': torch.stack([item['video'] for item in batch]),
+        'caption': [item['caption'] for item in batch],
+        'tracks': torch.stack([item['tracks'] for item in batch]),
+        'depth': torch.stack([item['depth'] for item in batch]),
+        'visibility': torch.stack([item['visibility'] for item in batch]),
+    }
+    for key in ('instance_map', 'masks', 'flow', 'occlusion', 'amodal_masks'):
+        if key in batch[0]:
+            out[key] = torch.stack([item[key] for item in batch])
+    return out
 
 
 def build_batch_cond(batch: Dict, builder: SceneHintBuilder) -> torch.Tensor:
@@ -40,6 +46,9 @@ def build_batch_cond(batch: Dict, builder: SceneHintBuilder) -> torch.Tensor:
             'depth': batch['depth'][i],
             'visibility': batch['visibility'][i],
         }
+        for key in ('instance_map', 'masks', 'flow', 'occlusion'):
+            if key in batch:
+                sample[key] = batch[key][i]
         conds.append(builder.build(sample))
     return torch.stack(conds, dim=0)
 
@@ -173,12 +182,14 @@ def build_datasets(config: Dict):
             f"Manifest dataset not found at {data_cfg['manifest_path']}. Set data.synthetic_fallback=true or provide a manifest."
         )
 
+    difficulty = str(data_cfg.get('synthetic_difficulty', 'mixed'))
     train_ds = SyntheticCollisionDataset(
         size=int(data_cfg['train_size']),
         num_frames=int(data_cfg['num_frames']),
         image_size=int(data_cfg['image_size']),
         max_objects=int(data_cfg['max_objects']),
         seed=int(config['seed']),
+        difficulty=difficulty,
     )
     val_ds = SyntheticCollisionDataset(
         size=int(data_cfg['val_size']),
@@ -186,6 +197,7 @@ def build_datasets(config: Dict):
         image_size=int(data_cfg['image_size']),
         max_objects=int(data_cfg['max_objects']),
         seed=int(config['seed']) + 1,
+        difficulty=difficulty,
     )
     return train_ds, val_ds
 
@@ -285,7 +297,7 @@ def train(config: Dict, resume_checkpoint: str | None = None) -> None:
         depth_bins=int(data_cfg['depth_bins']),
         image_size=int(data_cfg['image_size']),
     )
-    cond_channels = int(data_cfg['max_objects']) + int(data_cfg['depth_bins']) + int(data_cfg['max_objects'])
+    cond_channels = builder.num_channels()
     model = AntiChimeraVideoDiffusion(cond_channels=cond_channels, **model_cfg).to(device)
 
     optimizer = torch.optim.AdamW(
@@ -344,7 +356,8 @@ def train(config: Dict, resume_checkpoint: str | None = None) -> None:
         f.write(f'- snr_weight_min: `{snr_weight_min}`\n')
         f.write(f'- snr_weight_max: `{snr_weight_max}`\n')
         f.write(f'- ema_decay: `{ema_decay}`\n')
-        f.write(f'- ema_start_step: `{ema_start_step}`\n\n')
+        f.write(f'- ema_start_step: `{ema_start_step}`\n')
+        f.write(f'- cond_channels: `{cond_channels}`\n\n')
         if resume_checkpoint is not None:
             f.write(f'- resumed_from: `{resume_checkpoint}`\n\n')
 
@@ -393,6 +406,7 @@ def train(config: Dict, resume_checkpoint: str | None = None) -> None:
         else:
             val_loss, val_low_t_loss, val_high_t_loss = None, None, None
 
+        chimera_metrics = None
         ckpt = {
             'model': model.state_dict(),
             'optimizer': optimizer.state_dict(),
@@ -427,6 +441,12 @@ def train(config: Dict, resume_checkpoint: str | None = None) -> None:
                 sample_png = sample_dir / f'epoch_{epoch:03d}_sample.png'
                 save_gif(generated * 2 - 1, sample_gif)
                 save_video_png(generated * 2 - 1, sample_png)
+                chimera_metrics = compute_chimera_metrics(
+                    target_video=batch['video'][0].float(),
+                    generated_video=generated.float(),
+                    tracks=batch['tracks'][0].float(),
+                    visibility=batch['visibility'][0].float(),
+                )
 
         metrics = {
             'epoch': epoch,
@@ -436,6 +456,8 @@ def train(config: Dict, resume_checkpoint: str | None = None) -> None:
             'val_loss_low_t': val_low_t_loss,
             'val_loss_high_t': val_high_t_loss,
         }
+        if chimera_metrics is not None:
+            metrics.update({f'chimera/{k}': v for k, v in chimera_metrics.items()})
         with open(log_path, 'a', encoding='utf-8') as f:
             f.write(json.dumps(metrics, ensure_ascii=False) + '\n')
 
@@ -449,6 +471,9 @@ def train(config: Dict, resume_checkpoint: str | None = None) -> None:
                 if val_high_t_loss is not None:
                     f.write(f'- val_loss_high_t: `{val_high_t_loss:.6f}`\n')
             f.write(f'- step: `{global_step}`\n')
+            if chimera_metrics is not None:
+                for key, value in chimera_metrics.items():
+                    f.write(f'- {key}: `{value:.6f}`\n')
             if epoch % sample_every == 0:
                 f.write(f'- target_gif: `{sample_dir / f"epoch_{epoch:03d}_target.gif"}`\n')
                 f.write(f'- target_png: `{sample_dir / f"epoch_{epoch:03d}_target.png"}`\n')
