@@ -37,6 +37,11 @@ class _CogVideoXImpl(nn.Module):
         freeze_vae: bool = True,
         freeze_transformer: bool = True,
         torch_dtype: torch.dtype = torch.float16,
+        cache_dir: Optional[str] = None,
+        local_files_only: bool = False,
+        low_cpu_mem_usage: bool = True,
+        enable_gradient_checkpointing: bool = False,
+        conditioning_scale: float = 1.5,
         **_: object,
     ) -> None:
         super().__init__()
@@ -61,6 +66,9 @@ class _CogVideoXImpl(nn.Module):
             text_encoder_subfolder=text_encoder_subfolder,
             vae_subfolder=vae_subfolder,
             scheduler_subfolder=scheduler_subfolder,
+            cache_dir=cache_dir,
+            local_files_only=local_files_only,
+            low_cpu_mem_usage=low_cpu_mem_usage,
         )
         self.pipe = pipe
         self.variant = variant
@@ -73,6 +81,8 @@ class _CogVideoXImpl(nn.Module):
         if freeze_transformer:
             self.transformer.requires_grad_(False)
             self.transformer.eval()
+        elif enable_gradient_checkpointing and hasattr(self.transformer, 'enable_gradient_checkpointing'):
+            self.transformer.enable_gradient_checkpointing()
         if freeze_text_encoder:
             self.text_encoder.requires_grad_(False)
             self.text_encoder.eval()
@@ -80,14 +90,14 @@ class _CogVideoXImpl(nn.Module):
             self.vae.requires_grad_(False)
             self.vae.eval()
 
-        latent_channels = int(getattr(self.transformer.config, "in_channels", 16))
+        latent_channels = int(getattr(self.transformer.config, 'in_channels', 16))
         text_hidden = int(
-            getattr(self.text_encoder.config, "hidden_size", None)
-            or getattr(self.text_encoder.config, "d_model", None)
+            getattr(self.text_encoder.config, 'hidden_size', None)
+            or getattr(self.text_encoder.config, 'd_model', None)
             or 4096
         )
 
-        vae_latent_channels = int(getattr(self.vae.config, "latent_channels", 4))
+        vae_latent_channels = int(getattr(self.vae.config, 'latent_channels', 4))
         self.latent_in_proj = nn.Conv3d(vae_latent_channels, latent_channels, kernel_size=1)
         self.latent_out_proj = nn.Conv3d(latent_channels, vae_latent_channels, kernel_size=1)
 
@@ -100,7 +110,7 @@ class _CogVideoXImpl(nn.Module):
         self.cond_token_proj = nn.Linear(cond_channels, text_hidden)
         self.input_gate = nn.Parameter(torch.tensor(_logit(0.15)))
         self.token_gate = nn.Parameter(torch.tensor(_logit(0.10)))
-        self.conditioning_scale = 1.5
+        self.conditioning_scale = float(conditioning_scale)
 
     @property
     def num_train_timesteps(self) -> int:
@@ -109,6 +119,9 @@ class _CogVideoXImpl(nn.Module):
     @property
     def latent_scaling_factor(self) -> float:
         return float(getattr(self.vae.config, 'scaling_factor', 1.0))
+
+    def trainable_parameter_count(self) -> int:
+        return sum(int(p.numel()) for p in self.parameters() if p.requires_grad)
 
     def encode_prompts(self, prompts: List[str], device: torch.device) -> torch.Tensor:
         encoded = self.tokenizer(
@@ -143,13 +156,13 @@ class _CogVideoXImpl(nn.Module):
         return self.scheduler.add_noise(latents, noise, timesteps)
 
     def prediction_target(self, latents: torch.Tensor, noise: torch.Tensor, timesteps: torch.Tensor) -> torch.Tensor:
-        prediction_type = getattr(self.scheduler.config, "prediction_type", "epsilon")
-        if prediction_type == "v_prediction" and hasattr(self.scheduler, "get_velocity"):
+        prediction_type = getattr(self.scheduler.config, 'prediction_type', 'epsilon')
+        if prediction_type == 'v_prediction' and hasattr(self.scheduler, 'get_velocity'):
             return self.scheduler.get_velocity(latents, noise, timesteps)
         return noise
 
     def build_condition(self, cond: torch.Tensor, target_shape: Tuple[int, int, int]) -> Tuple[torch.Tensor, torch.Tensor]:
-        cond_latent = torch.nn.functional.interpolate(cond, size=target_shape, mode="trilinear", align_corners=False)
+        cond_latent = torch.nn.functional.interpolate(cond, size=target_shape, mode='trilinear', align_corners=False)
         cond_latent = self.cond_to_latent(cond_latent)
         cond_tokens = self.cond_pool(cond).flatten(start_dim=2).transpose(1, 2)
         cond_tokens = self.cond_token_proj(cond_tokens)
@@ -179,7 +192,6 @@ class _CogVideoXImpl(nn.Module):
         return tuple(latents.shape)
 
 
-
 class AntiChimeraVideoDiffusion(nn.Module):
     """Backend dispatcher for the anti-chimera experiments.
 
@@ -190,10 +202,10 @@ class AntiChimeraVideoDiffusion(nn.Module):
     def __init__(
         self,
         cond_channels: int,
-        backend: str = "lite3d",
+        backend: str = 'lite3d',
         pretrained_model_name_or_path: Optional[str] = None,
-        variant: str = "2b",
-        transformer_subfolder: str = "transformer",
+        variant: str = '2b',
+        transformer_subfolder: str = 'transformer',
         tokenizer_subfolder: Optional[str] = None,
         text_encoder_subfolder: Optional[str] = None,
         vae_subfolder: Optional[str] = None,
@@ -212,7 +224,7 @@ class AntiChimeraVideoDiffusion(nn.Module):
     ) -> None:
         super().__init__()
         self.backend = backend
-        if backend == "cogvideox":
+        if backend == 'cogvideox':
             self.impl = _CogVideoXImpl(
                 cond_channels=cond_channels,
                 pretrained_model_name_or_path=pretrained_model_name_or_path,
@@ -228,7 +240,7 @@ class AntiChimeraVideoDiffusion(nn.Module):
                 torch_dtype=torch_dtype,
                 **kwargs,
             )
-        elif backend == "lite3d":
+        elif backend == 'lite3d':
             self.impl = LiteVideoDenoiser(
                 cond_channels=cond_channels,
                 base_channels=base_channels,
@@ -239,7 +251,7 @@ class AntiChimeraVideoDiffusion(nn.Module):
                 dropout=dropout,
             )
         else:
-            raise ValueError(f"Unsupported backend: {backend}")
+            raise ValueError(f'Unsupported backend: {backend}')
 
     @property
     def scheduler(self):
