@@ -357,7 +357,8 @@ def train(config: Dict, resume_checkpoint: str | None = None) -> None:
         f.write(f'- snr_weight_max: `{snr_weight_max}`\n')
         f.write(f'- ema_decay: `{ema_decay}`\n')
         f.write(f'- ema_start_step: `{ema_start_step}`\n')
-        f.write(f'- cond_channels: `{cond_channels}`\n\n')
+        f.write(f'- cond_channels: `{cond_channels}`\n')
+        f.write('- validation_modes: `oracle_conditioned`, `prompt_only`\n\n')
         if resume_checkpoint is not None:
             f.write(f'- resumed_from: `{resume_checkpoint}`\n\n')
 
@@ -407,6 +408,7 @@ def train(config: Dict, resume_checkpoint: str | None = None) -> None:
             val_loss, val_low_t_loss, val_high_t_loss = None, None, None
 
         chimera_metrics = None
+        prompt_only_metrics = None
         ckpt = {
             'model': model.state_dict(),
             'optimizer': optimizer.state_dict(),
@@ -435,15 +437,26 @@ def train(config: Dict, resume_checkpoint: str | None = None) -> None:
                 if ema_state is not None:
                     _load_state_dict(model, ema_state)
                 generated = sample_video(model, prompt, config, device, cond=preview_cond)
+                prompt_only = sample_video(model, prompt, config, device, cond=None)
                 if backup_state is not None:
                     _load_state_dict(model, backup_state)
                 sample_gif = sample_dir / f'epoch_{epoch:03d}_sample.gif'
                 sample_png = sample_dir / f'epoch_{epoch:03d}_sample.png'
+                prompt_only_gif = sample_dir / f'epoch_{epoch:03d}_prompt_only.gif'
+                prompt_only_png = sample_dir / f'epoch_{epoch:03d}_prompt_only.png'
                 save_gif(generated * 2 - 1, sample_gif)
                 save_video_png(generated * 2 - 1, sample_png)
+                save_gif(prompt_only * 2 - 1, prompt_only_gif)
+                save_video_png(prompt_only * 2 - 1, prompt_only_png)
                 chimera_metrics = compute_chimera_metrics(
                     target_video=batch['video'][0].float(),
                     generated_video=generated.float(),
+                    tracks=batch['tracks'][0].float(),
+                    visibility=batch['visibility'][0].float(),
+                )
+                prompt_only_metrics = compute_chimera_metrics(
+                    target_video=batch['video'][0].float(),
+                    generated_video=prompt_only.float(),
                     tracks=batch['tracks'][0].float(),
                     visibility=batch['visibility'][0].float(),
                 )
@@ -457,7 +470,9 @@ def train(config: Dict, resume_checkpoint: str | None = None) -> None:
             'val_loss_high_t': val_high_t_loss,
         }
         if chimera_metrics is not None:
-            metrics.update({f'chimera/{k}': v for k, v in chimera_metrics.items()})
+            metrics.update({f'chimera/oracle/{k}': v for k, v in chimera_metrics.items()})
+        if prompt_only_metrics is not None:
+            metrics.update({f'chimera/prompt_only/{k}': v for k, v in prompt_only_metrics.items()})
         with open(log_path, 'a', encoding='utf-8') as f:
             f.write(json.dumps(metrics, ensure_ascii=False) + '\n')
 
@@ -473,12 +488,17 @@ def train(config: Dict, resume_checkpoint: str | None = None) -> None:
             f.write(f'- step: `{global_step}`\n')
             if chimera_metrics is not None:
                 for key, value in chimera_metrics.items():
-                    f.write(f'- {key}: `{value:.6f}`\n')
+                    f.write(f'- oracle_{key}: `{value:.6f}`\n')
+            if prompt_only_metrics is not None:
+                for key, value in prompt_only_metrics.items():
+                    f.write(f'- prompt_only_{key}: `{value:.6f}`\n')
             if epoch % sample_every == 0:
                 f.write(f'- target_gif: `{sample_dir / f"epoch_{epoch:03d}_target.gif"}`\n')
                 f.write(f'- target_png: `{sample_dir / f"epoch_{epoch:03d}_target.png"}`\n')
                 f.write(f'- sample_gif: `{sample_dir / f"epoch_{epoch:03d}_sample.gif"}`\n')
                 f.write(f'- sample_png: `{sample_dir / f"epoch_{epoch:03d}_sample.png"}`\n')
+                f.write(f'- prompt_only_gif: `{sample_dir / f"epoch_{epoch:03d}_prompt_only.gif"}`\n')
+                f.write(f'- prompt_only_png: `{sample_dir / f"epoch_{epoch:03d}_prompt_only.png"}`\n')
             f.write('\n')
 
         if max_steps and global_step >= max_steps:
