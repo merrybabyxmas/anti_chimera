@@ -122,6 +122,7 @@ def train(config: Dict, resume_checkpoint: str | None = None) -> None:
         f.write(f'- trainable_parameters: `{sum(int(p.numel()) for p in trainable_params)}`\n')
         f.write(f'- cond_channels: `{builder.num_channels()}`\n')
         f.write(f'- device: `{device}`\n')
+        f.write('- validation_modes: `oracle_conditioned`, `prompt_only`\n')
 
     for epoch in range(start_epoch, int(train_cfg.get('epochs', 1)) + 1):
         model.train()
@@ -165,7 +166,8 @@ def train(config: Dict, resume_checkpoint: str | None = None) -> None:
         torch.save(ckpt, ckpt_dir / 'last.pt')
         torch.save(ckpt, ckpt_dir / f'epoch_{epoch:03d}.pt')
 
-        chimera_metrics = None
+        oracle_metrics = None
+        prompt_only_metrics = None
         if epoch % int(train_cfg.get('sample_every', 1)) == 0:
             model.eval()
             batch = next(iter(val_loader))
@@ -173,18 +175,29 @@ def train(config: Dict, resume_checkpoint: str | None = None) -> None:
             save_gif(target, sample_dir / f'epoch_{epoch:03d}_target.gif')
             save_video_png(target, sample_dir / f'epoch_{epoch:03d}_target.png')
             cond = _batch_to_condition(batch, builder, device).float()[:1]
-            generated = sample_video(model, batch['caption'][0], config, device, cond=cond)
-            save_gif(generated * 2 - 1, sample_dir / f'epoch_{epoch:03d}_sample.gif')
-            save_video_png(generated * 2 - 1, sample_dir / f'epoch_{epoch:03d}_sample.png')
-            chimera_metrics = compute_chimera_metrics(
+            oracle_video = sample_video(model, batch['caption'][0], config, device, cond=cond)
+            prompt_only_video = sample_video(model, batch['caption'][0], config, device, cond=None)
+            save_gif(oracle_video * 2 - 1, sample_dir / f'epoch_{epoch:03d}_sample.gif')
+            save_video_png(oracle_video * 2 - 1, sample_dir / f'epoch_{epoch:03d}_sample.png')
+            save_gif(prompt_only_video * 2 - 1, sample_dir / f'epoch_{epoch:03d}_prompt_only.gif')
+            save_video_png(prompt_only_video * 2 - 1, sample_dir / f'epoch_{epoch:03d}_prompt_only.png')
+            oracle_metrics = compute_chimera_metrics(
                 target_video=batch['video'][0].float(),
-                generated_video=generated.float(),
+                generated_video=oracle_video.float(),
+                tracks=batch['tracks'][0].float(),
+                visibility=batch['visibility'][0].float(),
+            )
+            prompt_only_metrics = compute_chimera_metrics(
+                target_video=batch['video'][0].float(),
+                generated_video=prompt_only_video.float(),
                 tracks=batch['tracks'][0].float(),
                 visibility=batch['visibility'][0].float(),
             )
 
         payload = {'epoch': epoch, 'step': global_step, 'train_loss': avg_loss}
-        if chimera_metrics is not None:
-            payload.update({f'chimera/{k}': v for k, v in chimera_metrics.items()})
+        if oracle_metrics is not None:
+            payload.update({f'chimera/oracle/{k}': v for k, v in oracle_metrics.items()})
+        if prompt_only_metrics is not None:
+            payload.update({f'chimera/prompt_only/{k}': v for k, v in prompt_only_metrics.items()})
         with open(metrics_path, 'a', encoding='utf-8') as f:
             f.write(json.dumps(payload, ensure_ascii=False) + '\n')
