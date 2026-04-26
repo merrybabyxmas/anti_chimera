@@ -1,0 +1,53 @@
+seed: 42
+output_dir: outputs/lite3d
+
+data:
+  type: synthetic
+  manifest_path: data/train.jsonl
+  val_manifest_path: data/val.jsonl
+  root_dir: .
+  synthetic_fallback: true
+  num_frames: 12
+  image_size: 64
+  max_objects: 3
+  depth_bins: 4
+  train_size: 8192
+  val_size: 512
+  vocab_size: 1024
+
+model:
+  backend: lite3d
+  base_channels: 32
+  prompt_vocab_size: 1024
+  prompt_dim: 128
+  num_train_timesteps: 1000
+  max_prompt_tokens: 32
+  dropout: 0.05
+
+training:
+  batch_size: 2
+  num_workers: 2
+  epochs: 20
+  max_steps: 1200
+  lr: 0.0002
+  weight_decay: 0.00001
+  grad_clip: 1.0
+  log_every: 20
+  save_every: 1
+  val_every: 1
+  val_batches: 16
+  sample_every: 1
+  sample_prompt: "a white circle and a black square colliding"
+  condition_dropout_prob: 0.15
+  prompt_dropout_prob: 0.10
+  timestep_sampling_power: 2.5
+  snr_weight_strength: 1.0
+  snr_weight_cap: 30.0
+  snr_weight_min: 0.65
+  snr_weight_max: 1.35
+  amp: true
+  device: cuda
+
+sampling:
+  num_steps: 40
+  guidance_scale: 2.5

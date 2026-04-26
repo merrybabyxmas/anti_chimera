@@ -1,0 +1,55 @@
+seed: 42
+output_dir: outputs/lite3d_dw39
+
+data:
+  type: synthetic
+  manifest_path: data/train.jsonl
+  val_manifest_path: data/val.jsonl
+  root_dir: .
+  synthetic_fallback: true
+  num_frames: 8
+  image_size: 32
+  max_objects: 3
+  depth_bins: 4
+  train_size: 4096
+  val_size: 256
+  vocab_size: 1024
+
+model:
+  backend: lite3d
+  base_channels: 32
+  prompt_vocab_size: 1024
+  prompt_dim: 128
+  num_train_timesteps: 1000
+  max_prompt_tokens: 32
+  dropout: 0.05
+
+training:
+  batch_size: 4
+  num_workers: 0
+  epochs: 2
+  max_steps: 1000
+  lr: 0.0002
+  weight_decay: 0.00001
+  grad_clip: 1.0
+  log_every: 20
+  save_every: 1
+  val_every: 1
+  val_batches: 8
+  sample_every: 1
+  sample_prompt: a white circle and a black square colliding
+  condition_dropout_prob: 0.15
+  prompt_dropout_prob: 0.10
+  timestep_sampling_power: 2.5
+  snr_weight_strength: 1.0
+  snr_weight_cap: 30.0
+  snr_weight_min: 0.65
+  snr_weight_max: 1.35
+  ema_decay: 0.9995
+  ema_start_step: 0
+  amp: true
+  device: cuda
+
+sampling:
+  num_steps: 50
+  guidance_scale: 1.0

@@ -841,6 +841,33 @@ The repository already captures the intended project direction, but not every la
 
 ---
 
+# 16. Practical Lite Backend
+
+To make the repository runnable end-to-end on a single GPU without waiting for large CogVideoX downloads, the project now also includes a lightweight `lite3d` backend.
+
+## 16.1 What it changes
+
+- trains directly in pixel space,
+- keeps the scene-hint conditioning path,
+- uses a small learned prompt encoder instead of a remote text model,
+- uses a minimal DDIM-style scheduler,
+- supports classifier-free guidance during sampling,
+- works well as the first validation target on synthetic collision videos.
+
+## 16.2 Why it matters
+
+This backend does not replace the CogVideoX direction. It gives the repository a practical, fully self-contained path for:
+
+- environment verification,
+- quick iteration,
+- actual GPU training,
+- actual GPU sampling,
+- regression testing of the conditioning logic.
+
+In other words, it is the execution path that lets the research scaffold become a real experiment loop before the heavyweight backbone is brought in.
+
+---
+
 # 16. Current Bottlenecks
 
 From a code-review and execution perspective, the main bottlenecks are:
@@ -903,3 +930,24 @@ The project already has:
 Its main remaining challenge is not conceptual clarity, but **systems robustness**: large-model loading, memory management, realistic fine-tuning policy, and practical execution stability.
 
 This document should be treated as the canonical record of the repository’s current logic and execution pipeline at this stage of development.
+
+
+---
+
+# 10. Current Backbone and Real-Data Training Plan
+
+As of 2026-04-25, the intended real-data path is:
+
+1. use the pretrained CogVideoX-2B pipeline from `diffusers`,
+2. keep the backbone frozen by default,
+3. train only the anti-chimera conditioning path and lightweight adapters,
+4. prepare real data through `scripts/prepare_viddata.py`,
+5. run the manifest-based train / sample scripts on `configs/cogvideox_viddata*.yaml`.
+
+This is the main separation of responsibilities:
+
+- **backbone / tokenizer / VAE / scheduler**: reused from the pretrained CogVideoX stack,
+- **custom logic**: scene hint building, conditioning injection, data manifesting, and experiment logging,
+- **lite3d path**: smoke-test only, kept for fast local validation and debugging.
+
+The first real dataset selected for the project is `Databoost/VidData`, because it already ships MP4 files and caption metadata, so it can be turned into manifests without any extra scraping or format conversion.

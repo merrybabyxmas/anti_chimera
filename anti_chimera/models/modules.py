@@ -7,6 +7,11 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
+def _logit(prob: float) -> float:
+    prob = min(max(prob, 1e-4), 1.0 - 1e-4)
+    return math.log(prob / (1.0 - prob))
+
+
 def timestep_embedding(timesteps: torch.Tensor, dim: int) -> torch.Tensor:
     half = dim // 2
     freqs = torch.exp(-math.log(10000) * torch.arange(half, device=timesteps.device) / max(half - 1, 1))
@@ -55,7 +60,14 @@ class Upsample3D(nn.Module):
 
 
 class SceneInjector(nn.Module):
-    def __init__(self, feat_ch: int, cond_ch: int, text_dim: int) -> None:
+    def __init__(
+        self,
+        feat_ch: int,
+        cond_ch: int,
+        text_dim: int,
+        gate_init: float = 0.15,
+        conditioning_scale: float = 1.5,
+    ) -> None:
         super().__init__()
         self.cond_proj = nn.Sequential(
             nn.Conv3d(cond_ch, feat_ch, 3, padding=1),
@@ -63,9 +75,10 @@ class SceneInjector(nn.Module):
             nn.Conv3d(feat_ch, feat_ch, 3, padding=1),
         )
         self.text_proj = nn.Linear(text_dim, feat_ch)
-        self.gate = nn.Parameter(torch.tensor(0.0))
+        self.gate = nn.Parameter(torch.tensor(_logit(gate_init)))
+        self.conditioning_scale = conditioning_scale
 
     def forward(self, x: torch.Tensor, cond: torch.Tensor, text_emb: torch.Tensor) -> torch.Tensor:
         cond_feat = self.cond_proj(cond)
         text_bias = self.text_proj(text_emb)[:, :, None, None, None]
-        return x + torch.tanh(self.gate) * (cond_feat + text_bias)
+        return x + torch.sigmoid(self.gate) * self.conditioning_scale * (cond_feat + text_bias)

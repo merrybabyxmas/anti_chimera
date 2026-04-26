@@ -1,0 +1,70 @@
+seed: 42
+output_dir: outputs/cogvideox_viddata_semantic_plus_smoke
+
+data:
+  type: manifest
+  manifest_path: data/viddata_sidecar_semantic_plus_smoke/train.jsonl
+  val_manifest_path: data/viddata_sidecar_semantic_plus_smoke/val.jsonl
+  root_dir: .
+  synthetic_fallback: false
+  num_frames: 25
+  image_size: 256
+  max_objects: 4
+  depth_bins: 4
+  train_size: 0
+  val_size: 0
+  vocab_size: 256
+
+model:
+  backend: cogvideox
+  variant: 2b
+  pretrained_model_name_or_path: THUDM/CogVideoX-2b
+  rank: 8
+  lora_alpha: 8
+
+training:
+  num_workers: 0
+  epochs: 1
+  max_steps: 0
+  lr: 0.0005
+  weight_decay: 0.0001
+  grad_clip: 1.0
+  log_every: 1
+  save_every: 1
+  val_every: 1
+  sample_every: 4
+  amp: true
+  device: cuda
+  condition_dropout_prob: 0.0
+  prompt_dropout_prob: 0.0
+  timestep_sampling_power: 1.25
+  snr_weight_strength: 0.15
+  snr_weight_cap: 20.0
+  snr_weight_min: 0.75
+  snr_weight_max: 1.25
+  ema_decay: 0.9995
+  ema_start_step: 0
+  train_batch_size: 1
+  learning_rate: 0.000015
+  gradient_accumulation_steps: 1
+  gradient_checkpointing: true
+  mixed_precision: fp16
+  enable_slicing: true
+  enable_tiling: true
+  validation_prompt: The video shows the interior of a car.
+  scene_token_count: 4
+  lr_warmup_steps: 2
+  max_train_steps: 8
+  checkpointing_steps: 4
+  validation_epochs: 1
+  conditioning_mode: hybrid
+  scene_prompt_scale: 0.1
+  latent_control_scale: 0.5
+  latent_control_hidden_channels: 128
+  reference_scale: 0.15
+
+sampling:
+  num_steps: 8
+  guidance_scale: 1.5
+  image_size: 128
+  num_frames: 17

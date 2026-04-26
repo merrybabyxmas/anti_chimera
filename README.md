@@ -69,6 +69,13 @@ pip install -e .
 
 The editable install avoids the earlier `ModuleNotFoundError: anti_chimera` issue.
 
+If you are only running the `lite3d` backend, you can use the smaller dependency set:
+
+```bash
+pip install -r requirements-lite.txt
+pip install -e .
+```
+
 ## Environment check
 
 ```bash
@@ -127,12 +134,29 @@ python scripts/train.py --config configs/cogvideox_5b.yaml
 
 If no manifest exists and `data.synthetic_fallback=true`, training falls back to the lightweight synthetic dataset.
 
+For a GPU-friendly end-to-end experiment that does not require downloading CogVideoX, use the lightweight video diffusion backend:
+
+```bash
+python scripts/train.py --config configs/lite3d.yaml
+```
+
+That path trains directly on the bundled synthetic collision dataset and is the recommended first smoke test for new environments.
+
+For real-data CogVideoX experiments, prepare VidData first:
+
+```bash
+python scripts/prepare_viddata.py --output-dir data/viddata
+python scripts/train.py --config configs/cogvideox_viddata_smoke.yaml
+```
+
+Use `configs/cogvideox_viddata.yaml` once the smoke test is clean and you want the longer run.
+
 ## Sample
 
 ```bash
 python scripts/sample.py \
-  --config configs/cogvideox_2b.yaml \
-  --checkpoint outputs/cogvideox_2b/checkpoints/last.pt \
+  --config configs/lite3d.yaml \
+  --checkpoint outputs/lite3d/checkpoints/last.pt \
   --prompt "a white cat and a black cat colliding" \
   --out outputs/samples/sample.gif
 ```

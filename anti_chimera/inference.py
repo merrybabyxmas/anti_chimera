@@ -37,15 +37,30 @@ def build_null_condition(prompt: str, config: Dict, device: torch.device) -> tor
     }
     builder = SceneHintBuilder(max_objects=max_objects, depth_bins=data_cfg['depth_bins'], image_size=H)
     cond = builder.build(sample).unsqueeze(0).to(device)
+    if not prompt.strip():
+        cond.zero_()
     return cond
 
 
 @torch.no_grad()
-def sample_video(model, prompt: str, config: Dict, device: torch.device) -> torch.Tensor:
+def sample_video(
+    model,
+    prompt: str,
+    config: Dict,
+    device: torch.device,
+    cond: torch.Tensor | None = None,
+) -> torch.Tensor:
     model.eval()
     data_cfg = config['data']
     sampling_cfg = config['sampling']
-    cond = build_null_condition(prompt, config, device)
+    if cond is None:
+        cond = build_null_condition(prompt, config, device)
+    else:
+        if cond.ndim == 4:
+            cond = cond.unsqueeze(0)
+        cond = cond.to(device)
+    guidance_scale = float(sampling_cfg.get('guidance_scale', 1.0))
+    use_cfg = guidance_scale > 1.0
 
     num_steps = int(sampling_cfg['num_steps'])
     if hasattr(model.scheduler, 'set_timesteps'):
@@ -60,14 +75,21 @@ def sample_video(model, prompt: str, config: Dict, device: torch.device) -> torc
         width=data_cfg['image_size'],
         device=device,
     )
-    latents = torch.randn(latent_shape, device=device, dtype=next(model.parameters()).dtype)
+    latent_dtype = torch.float16 if device.type == 'cuda' else next(model.parameters()).dtype
+    latents = torch.randn(latent_shape, device=device, dtype=latent_dtype)
 
-    for timestep in timesteps:
-        t = timestep if torch.is_tensor(timestep) else torch.tensor(timestep, device=device)
-        t_batch = t.reshape(1).long()
-        noise_pred = model(latents, t_batch, [prompt], cond)
-        step_out = model.scheduler.step(noise_pred, t, latents)
-        latents = step_out.prev_sample if hasattr(step_out, 'prev_sample') else step_out[0]
+    with torch.autocast(device_type=device.type, enabled=device.type == 'cuda', dtype=torch.float16):
+        for timestep in timesteps:
+            t = timestep if torch.is_tensor(timestep) else torch.tensor(timestep, device=device)
+            t_batch = t.reshape(1).long()
+            if use_cfg:
+                uncond = model(latents, t_batch, [""], torch.zeros_like(cond))
+                cond_pred = model(latents, t_batch, [prompt], cond)
+                noise_pred = uncond + guidance_scale * (cond_pred - uncond)
+            else:
+                noise_pred = model(latents, t_batch, [prompt], cond)
+            step_out = model.scheduler.step(noise_pred, t, latents)
+            latents = step_out.prev_sample if hasattr(step_out, 'prev_sample') else step_out[0]
 
     video = model.decode_latents(latents)
     video = ((video[0].detach().cpu() + 1.0) * 0.5).clamp(0.0, 1.0)

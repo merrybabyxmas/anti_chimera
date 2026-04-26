@@ -1,0 +1,58 @@
+seed: 42
+output_dir: outputs/cogvideox_quality_probe_i2v15_sidecar_prompt_overfit8_128_200
+
+data:
+  type: manifest
+  manifest_path: data/viddata_curriculum/curated8_train.jsonl
+  val_manifest_path: data/viddata_curriculum/curated8_val.jsonl
+  root_dir: .
+  synthetic_fallback: false
+  num_frames: 13
+  image_size: 128
+  max_objects: 4
+  depth_bins: 4
+
+model:
+  backend: cogvideox
+  variant: none
+  pretrained_model_name_or_path: zai-org/CogVideoX1.5-5B-I2V
+  rank: 16
+  lora_alpha: 16
+
+training:
+  objective_mode: official_cogvideox
+  reference_conditioning: first_frame_i2v
+  train_batch_size: 1
+  gradient_accumulation_steps: 1
+  gradient_checkpointing: true
+  mixed_precision: bf16
+  enable_slicing: true
+  enable_tiling: true
+  precompute_latents: true
+  num_workers: 0
+  learning_rate: 0.00005
+  lr_scheduler: constant
+  lr_warmup_steps: 0
+  max_train_steps: 200
+  checkpointing_steps: 100
+  sample_every: 0
+  grad_clip: 1.0
+  conditioning_mode: prompt_bias
+  scene_prompt_scale: 0.25
+  latent_control_scale: 0.0
+  latent_control_warmup_steps: 0
+  latent_control_hidden_channels: 64
+  latent_control_gate_init: -4.0
+  reference_scale: 0.0
+  i2v_image_noise_sigma_mean: -3.0
+  i2v_image_noise_sigma_std: 0.5
+  condition_dropout_prob: 0.0
+  prompt_dropout_prob: 0.0
+  validation_prompt: The video shows people in a coherent scene.
+
+sampling:
+  num_steps: 8
+  guidance_scale: 1.5
+  image_size: 256
+  num_frames: 13
+  ablation_variants: []
