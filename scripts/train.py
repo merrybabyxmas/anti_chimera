@@ -10,7 +10,8 @@ if str(ROOT) not in sys.path:
 
 from anti_chimera.config import load_config
 from anti_chimera.trainer import train as train_lite
-from anti_chimera.trainer_cogvideox import train as train_cogvideox
+from anti_chimera.trainer_cogvideox import train as train_cogvideox_legacy
+from anti_chimera.trainer_cogvideox_v2 import train as train_cogvideox_v2
 from anti_chimera.utils import set_seed
 
 
@@ -22,8 +23,12 @@ def main() -> None:
     config = load_config(args.config)
     set_seed(int(config['seed']))
     backend = str(config.get('model', {}).get('backend', 'lite3d'))
+    trainer_variant = str(config.get('training', {}).get('cogvideox_trainer', 'v2')).lower()
     if backend == 'cogvideox':
-        train_cogvideox(config, resume_checkpoint=args.resume)
+        if trainer_variant == 'legacy':
+            train_cogvideox_legacy(config, resume_checkpoint=args.resume)
+        else:
+            train_cogvideox_v2(config, resume_checkpoint=args.resume)
     else:
         train_lite(config, resume_checkpoint=args.resume)
 
