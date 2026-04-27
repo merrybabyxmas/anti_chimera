@@ -15,6 +15,9 @@ data:
   val_size: 256
   vocab_size: 256
 
+planner:
+  checkpoint: outputs/planner_real/checkpoints/last.pt
+
 model:
   backend: cogvideox
   variant: 5b
@@ -38,6 +41,7 @@ training:
   save_every: 1
   amp: false
   device: cuda
+  cogvideox_trainer: v2
 
 sampling:
   num_steps: 50
