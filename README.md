@@ -21,15 +21,16 @@ This repository prefers reuse over scratch.
 - VAE and scheduler: reuse the pretrained CogVideoX components
 - data pipeline: manifest adapter for existing video datasets
 - synthetic data: fallback smoke-test path only
+- prompt-only planning: learned text-to-plan module trained before the main video experiment
 
 ## Included components
 
 - manifest-based dataset loading for existing videos
 - optional sidecar loading for tracks / depth / visibility arrays
 - unified scene-hint builder
+- learned text-to-plan planner
 - scene-conditioned CogVideoX wrapper
 - train / sample scripts
-- environment doctor script
 - synthetic fallback dataset
 
 ## Layout
@@ -42,20 +43,27 @@ anti_chimera/
     scene_hint.py
   models/
     model.py
-  config.py
+  planner.py
+  planner_learned.py
   trainer.py
+  trainer_cogvideox_v2.py
+  trainer_planner.py
   inference.py
+  inference_with_planner.py
   text.py
   utils.py
 configs/
-  default.yaml
+  planner_synthetic.yaml
+  planner_real_template.yaml
+  lite3d_curriculum.yaml
   cogvideox_2b.yaml
   cogvideox_5b.yaml
 scripts/
   build_manifest.py
-  doctor.py
   train.py
+  train_planner.py
   sample.py
+  sample_with_planner.py
 ```
 
 ## Install
@@ -69,17 +77,69 @@ pip install -e .
 
 The editable install avoids the earlier `ModuleNotFoundError: anti_chimera` issue.
 
-If you are only running the `lite3d` backend, you can use the smaller dependency set:
+## Standard experiment order
+
+The repository is now designed around a **planner-first** workflow.
+
+### Stage 1. Train the learned planner first
+
+Synthetic planner training:
 
 ```bash
-pip install -r requirements-lite.txt
-pip install -e .
+python scripts/train_planner.py --config configs/planner_synthetic.yaml
 ```
 
-## Environment check
+Real-data planner training template:
 
 ```bash
-python scripts/doctor.py
+python scripts/train_planner.py --config configs/planner_real_template.yaml
+```
+
+This produces a planner checkpoint such as:
+
+```text
+outputs/planner_synthetic/checkpoints/last.pt
+```
+
+or
+
+```text
+outputs/planner_real/checkpoints/last.pt
+```
+
+### Stage 2. Run the main video experiment
+
+Lite synthetic curriculum experiment:
+
+```bash
+python scripts/train.py --config configs/lite3d_curriculum.yaml
+```
+
+CogVideoX 2B experiment:
+
+```bash
+python scripts/train.py --config configs/cogvideox_2b.yaml
+```
+
+CogVideoX 5B experiment:
+
+```bash
+python scripts/train.py --config configs/cogvideox_5b.yaml
+```
+
+## Important planner note
+
+The main experiment configs now already contain a `planner.checkpoint` field.
+
+That means validation prompt-only generation will:
+
+1. use the learned planner checkpoint first, if it exists,
+2. otherwise fall back to the older heuristic prompt planner.
+
+So the intended execution order is:
+
+```text
+train planner -> produce planner checkpoint -> run main video experiment
 ```
 
 ## Build manifests
@@ -117,50 +177,34 @@ Optional sidecars under `--sidecar-root`:
 - `*_tracks.npy`
 - `*_depth.npy`
 - `*_visibility.npy`
+- `*_masks.npy`
+- `*_flow.npy`
+- `*_occlusion.npy`
 
-## Train
+## Planner-driven sampling
 
-Choose one of the preset configs and set `model.pretrained_model_name_or_path` to your local path or model id.
-
-```bash
-python scripts/train.py --config configs/cogvideox_2b.yaml
-```
-
-or
+After both a video model checkpoint and a planner checkpoint exist, planner-driven prompt-only sampling can be run with:
 
 ```bash
-python scripts/train.py --config configs/cogvideox_5b.yaml
-```
-
-If no manifest exists and `data.synthetic_fallback=true`, training falls back to the lightweight synthetic dataset.
-
-For a GPU-friendly end-to-end experiment that does not require downloading CogVideoX, use the lightweight video diffusion backend:
-
-```bash
-python scripts/train.py --config configs/lite3d.yaml
-```
-
-That path trains directly on the bundled synthetic collision dataset and is the recommended first smoke test for new environments.
-
-For real-data CogVideoX experiments, prepare VidData first:
-
-```bash
-python scripts/prepare_viddata.py --output-dir data/viddata
-python scripts/train.py --config configs/cogvideox_viddata_smoke.yaml
-```
-
-Use `configs/cogvideox_viddata.yaml` once the smoke test is clean and you want the longer run.
-
-## Sample
-
-```bash
-python scripts/sample.py \
-  --config configs/lite3d.yaml \
-  --checkpoint outputs/lite3d/checkpoints/last.pt \
+python scripts/sample_with_planner.py \
+  --config configs/lite3d_curriculum.yaml \
+  --checkpoint outputs/lite3d_curriculum/checkpoints/last.pt \
+  --planner-checkpoint outputs/planner_synthetic/checkpoints/last.pt \
   --prompt "a white cat and a black cat colliding" \
-  --out outputs/samples/sample.gif
+  --out outputs/samples/planned_sample.gif
 ```
 
 ## Important note
 
-The code is now designed so that the **only custom research logic** is the anti-chimera scene conditioning. The backbone, text encoder, tokenizer, VAE, and scheduler are all intended to be reused from CogVideoX.
+The code is now organized so that the custom research logic is split into two explicit pieces:
+
+1. **learned text-to-plan**
+2. **anti-chimera scene-conditioned video generation**
+
+In other words, the intended full system is:
+
+```text
+prompt -> learned planner -> scene hint -> video diffusion model
+```
+
+The backbone, tokenizer, VAE, and scheduler are still intended to be reused from CogVideoX whenever the heavyweight path is used.
