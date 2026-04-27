@@ -1,0 +1,37 @@
+seed: 42
+output_dir: outputs/planner_real
+
+data:
+  type: manifest
+  manifest_path: data/train.jsonl
+  val_manifest_path: data/val.jsonl
+  root_dir: .
+  num_frames: 16
+  image_size: 64
+  max_objects: 3
+  depth_bins: 6
+
+planner:
+  prompt_vocab_size: 4096
+  hidden_size: 256
+  max_prompt_tokens: 48
+  num_layers: 4
+  num_heads: 8
+  dropout: 0.1
+
+training:
+  batch_size: 8
+  eval_batch_size: 8
+  num_workers: 0
+  epochs: 20
+  lr: 0.0001
+  weight_decay: 0.0001
+  grad_clip: 1.0
+  amp: true
+  device: cuda
+  track_weight: 5.0
+  depth_weight: 2.0
+  visibility_weight: 1.0
+  mask_weight: 1.0
+  occ_weight: 1.0
+  count_weight: 0.5
