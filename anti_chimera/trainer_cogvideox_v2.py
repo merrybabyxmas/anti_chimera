@@ -13,6 +13,7 @@ from tqdm import tqdm
 from anti_chimera.data.manifest import ManifestVideoDataset
 from anti_chimera.data.scene_hint import SceneHintBuilder
 from anti_chimera.inference import sample_video
+from anti_chimera.inference_with_planner import sample_video_with_planner
 from anti_chimera.metrics import compute_chimera_metrics
 from anti_chimera.models.model import AntiChimeraVideoDiffusion
 from anti_chimera.utils import default_device, ensure_dir, normalize_video, save_gif, save_video_png
@@ -53,6 +54,8 @@ def train(config: Dict, resume_checkpoint: str | None = None) -> None:
     data_cfg = config['data']
     model_cfg = config['model']
     train_cfg = config['training']
+    planner_cfg = dict(config.get('planner', {}))
+    planner_checkpoint = planner_cfg.get('checkpoint')
     device = default_device(train_cfg.get('device', 'cuda'))
 
     out_dir = ensure_dir(config['output_dir'])
@@ -122,6 +125,7 @@ def train(config: Dict, resume_checkpoint: str | None = None) -> None:
         f.write(f'- trainable_parameters: `{sum(int(p.numel()) for p in trainable_params)}`\n')
         f.write(f'- cond_channels: `{builder.num_channels()}`\n')
         f.write(f'- device: `{device}`\n')
+        f.write(f'- planner_checkpoint: `{planner_checkpoint or "none"}`\n')
         f.write('- validation_modes: `oracle_conditioned`, `prompt_only`\n')
 
     for epoch in range(start_epoch, int(train_cfg.get('epochs', 1)) + 1):
@@ -176,7 +180,10 @@ def train(config: Dict, resume_checkpoint: str | None = None) -> None:
             save_video_png(target, sample_dir / f'epoch_{epoch:03d}_target.png')
             cond = _batch_to_condition(batch, builder, device).float()[:1]
             oracle_video = sample_video(model, batch['caption'][0], config, device, cond=cond)
-            prompt_only_video = sample_video(model, batch['caption'][0], config, device, cond=None)
+            if planner_checkpoint:
+                prompt_only_video = sample_video_with_planner(model, batch['caption'][0], config, device, planner_checkpoint=planner_checkpoint)
+            else:
+                prompt_only_video = sample_video(model, batch['caption'][0], config, device, cond=None)
             save_gif(oracle_video * 2 - 1, sample_dir / f'epoch_{epoch:03d}_sample.gif')
             save_video_png(oracle_video * 2 - 1, sample_dir / f'epoch_{epoch:03d}_sample.png')
             save_gif(prompt_only_video * 2 - 1, sample_dir / f'epoch_{epoch:03d}_prompt_only.gif')
