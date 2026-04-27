@@ -75,7 +75,7 @@ def train_planner(config: Dict, resume_checkpoint: str | None = None) -> None:
     seed = int(config.get('seed', 42))
     set_seed(seed)
     data_cfg = config['data']
-    planner_cfg = config['planner']
+    planner_cfg = dict(config.get('planner', {}))
     train_cfg = config['training']
     device = default_device(train_cfg.get('device', 'cuda'))
 
@@ -84,22 +84,8 @@ def train_planner(config: Dict, resume_checkpoint: str | None = None) -> None:
     metrics_path = out_dir / 'planner_metrics.jsonl'
 
     train_ds, val_ds = _build_datasets(config)
-    train_loader = DataLoader(
-        train_ds,
-        batch_size=int(train_cfg.get('batch_size', 16)),
-        shuffle=True,
-        num_workers=int(train_cfg.get('num_workers', 0)),
-        collate_fn=_collate,
-        pin_memory=device.type == 'cuda',
-    )
-    val_loader = DataLoader(
-        val_ds,
-        batch_size=int(train_cfg.get('eval_batch_size', train_cfg.get('batch_size', 16))),
-        shuffle=False,
-        num_workers=int(train_cfg.get('num_workers', 0)),
-        collate_fn=_collate,
-        pin_memory=device.type == 'cuda',
-    )
+    train_loader = DataLoader(train_ds, batch_size=int(train_cfg.get('batch_size', 16)), shuffle=True, num_workers=int(train_cfg.get('num_workers', 0)), collate_fn=_collate, pin_memory=device.type == 'cuda')
+    val_loader = DataLoader(val_ds, batch_size=int(train_cfg.get('eval_batch_size', train_cfg.get('batch_size', 16))), shuffle=False, num_workers=int(train_cfg.get('num_workers', 0)), collate_fn=_collate, pin_memory=device.type == 'cuda')
 
     planner = LearnedPromptPlanner(
         max_objects=int(data_cfg['max_objects']),
@@ -190,12 +176,7 @@ def train_planner(config: Dict, resume_checkpoint: str | None = None) -> None:
                 val_total.append(loss_dict['total'].item())
                 val_track.append(_planner_metric(pred.tracks, gt_tracks))
 
-        payload = {
-            'epoch': epoch,
-            'train_loss': float(sum(losses) / max(len(losses), 1)),
-            'val_loss': float(sum(val_total) / max(len(val_total), 1)),
-            'val_track_l1': float(sum(val_track) / max(len(val_track), 1)),
-        }
+        payload = {'epoch': epoch, 'train_loss': float(sum(losses) / max(len(losses), 1)), 'val_loss': float(sum(val_total) / max(len(val_total), 1)), 'val_track_l1': float(sum(val_track) / max(len(val_track), 1))}
         with open(metrics_path, 'a', encoding='utf-8') as f:
             f.write(json.dumps(payload, ensure_ascii=False) + '\n')
         torch.save({'planner': planner.state_dict(), 'optimizer': optimizer.state_dict(), 'epoch': epoch, 'config': config}, ckpt_dir / 'last.pt')
