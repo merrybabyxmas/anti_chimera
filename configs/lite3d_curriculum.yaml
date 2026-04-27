@@ -11,6 +11,9 @@ data:
   train_size: 12000
   val_size: 256
 
+planner:
+  checkpoint: outputs/planner_synthetic/checkpoints/last.pt
+
 model:
   backend: lite3d
   base_channels: 48
