@@ -16,6 +16,7 @@ from anti_chimera.data.manifest import ManifestVideoDataset
 from anti_chimera.data.scene_hint import SceneHintBuilder
 from anti_chimera.data.synthetic_collision import SyntheticCollisionDataset
 from anti_chimera.inference import sample_video
+from anti_chimera.inference_with_planner import sample_video_with_planner
 from anti_chimera.metrics import compute_chimera_metrics
 from anti_chimera.models.model import AntiChimeraVideoDiffusion
 from anti_chimera.utils import default_device, ensure_dir, normalize_video, save_gif, save_video_png
@@ -268,6 +269,8 @@ def train(config: Dict, resume_checkpoint: str | None = None) -> None:
     data_cfg = config['data']
     model_cfg = config['model']
     train_cfg = config['training']
+    planner_cfg = dict(config.get('planner', {}))
+    planner_checkpoint = planner_cfg.get('checkpoint')
 
     train_ds, val_ds = build_datasets(config)
     train_loader = DataLoader(
@@ -358,6 +361,7 @@ def train(config: Dict, resume_checkpoint: str | None = None) -> None:
         f.write(f'- ema_decay: `{ema_decay}`\n')
         f.write(f'- ema_start_step: `{ema_start_step}`\n')
         f.write(f'- cond_channels: `{cond_channels}`\n')
+        f.write(f'- planner_checkpoint: `{planner_checkpoint or "none"}`\n')
         f.write('- validation_modes: `oracle_conditioned`, `prompt_only`\n\n')
         if resume_checkpoint is not None:
             f.write(f'- resumed_from: `{resume_checkpoint}`\n\n')
@@ -437,7 +441,10 @@ def train(config: Dict, resume_checkpoint: str | None = None) -> None:
                 if ema_state is not None:
                     _load_state_dict(model, ema_state)
                 generated = sample_video(model, prompt, config, device, cond=preview_cond)
-                prompt_only = sample_video(model, prompt, config, device, cond=None)
+                if planner_checkpoint:
+                    prompt_only = sample_video_with_planner(model, prompt, config, device, planner_checkpoint=planner_checkpoint)
+                else:
+                    prompt_only = sample_video(model, prompt, config, device, cond=None)
                 if backup_state is not None:
                     _load_state_dict(model, backup_state)
                 sample_gif = sample_dir / f'epoch_{epoch:03d}_sample.gif'
