@@ -4,7 +4,7 @@ from typing import Dict
 
 import torch
 
-from anti_chimera.data.scene_hint import SceneHintBuilder
+from anti_chimera.data.scene_hint_modes import build_scene_hint_builder
 from anti_chimera.planner import PromptScenePlanner
 from anti_chimera.text import PromptParser
 
@@ -40,7 +40,7 @@ def build_null_condition(prompt: str, config: Dict, device: torch.device) -> tor
             'flow': planned.flow,
             'occlusion': planned.occlusion,
         }
-    builder = SceneHintBuilder(max_objects=max_objects, depth_bins=int(data_cfg['depth_bins']), image_size=H)
+    builder = build_scene_hint_builder(data_cfg)
     cond = builder.build(sample).unsqueeze(0).to(device)
     if not prompt.strip():
         cond.zero_()
