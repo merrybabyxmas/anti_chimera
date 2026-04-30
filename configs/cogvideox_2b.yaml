@@ -7,6 +7,7 @@ data:
   val_manifest_path: data/val.jsonl
   root_dir: .
   synthetic_fallback: true
+  scene_hint_mode: minimal
   num_frames: 12
   image_size: 64
   max_objects: 3
