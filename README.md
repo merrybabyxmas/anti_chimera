@@ -22,15 +22,16 @@ This repository prefers reuse over scratch.
 - data pipeline: manifest adapter for existing video datasets
 - synthetic data: fallback smoke-test path only
 - prompt-only planning: learned text-to-plan module trained before the main video experiment
+- real-data target: meaningful gains on real manifests with pretrained backbones
 
 ## Included components
 
 - manifest-based dataset loading for existing videos
 - optional sidecar loading for tracks / depth / visibility arrays
-- unified scene-hint builder
+- minimal and full scene-hint modes
 - learned text-to-plan planner
 - scene-conditioned CogVideoX wrapper
-- train / sample scripts
+- train / sample / evaluate / manifest-check scripts
 - synthetic fallback dataset
 
 ## Layout
@@ -41,6 +42,8 @@ anti_chimera/
     manifest.py
     synthetic_collision.py
     scene_hint.py
+    scene_hint_minimal.py
+    scene_hint_modes.py
   models/
     model.py
   planner.py
@@ -58,12 +61,19 @@ configs/
   lite3d_curriculum.yaml
   cogvideox_2b.yaml
   cogvideox_5b.yaml
+  cogvideox_2b_real_oracle_minimal.yaml
+  cogvideox_5b_real_oracle_minimal.yaml
 scripts/
   build_manifest.py
+  check_manifest_sidecars.py
   train.py
   train_planner.py
+  evaluate_real_manifest.py
   sample.py
   sample_with_planner.py
+docs/
+  PROJECT_LOGIC_AND_PIPELINE.md
+  REAL_MANIFEST_PRETRAINED_BACKBONE_PLAN.md
 ```
 
 ## Install
@@ -76,6 +86,27 @@ pip install -e .
 ```
 
 The editable install avoids the earlier `ModuleNotFoundError: anti_chimera` issue.
+
+## Recommended priority: real manifest + pretrained backbone
+
+The final objective is now explicitly:
+
+```text
+real video manifest + pretrained backbone + minimal anti-chimera conditioning
+```
+
+That means the highest-priority order is:
+
+```text
+build/check real manifest
+→ train planner on real sidecars
+→ run oracle-conditioned pretrained-backbone experiment
+→ run planner-conditioned prompt-only validation
+```
+
+For the detailed plan, read:
+
+- `docs/REAL_MANIFEST_PRETRAINED_BACKBONE_PLAN.md`
 
 ## Standard experiment order
 
@@ -99,11 +130,6 @@ This produces a planner checkpoint such as:
 
 ```text
 outputs/planner_synthetic/checkpoints/last.pt
-```
-
-or
-
-```text
 outputs/planner_real/checkpoints/last.pt
 ```
 
@@ -127,9 +153,25 @@ CogVideoX 5B experiment:
 python scripts/train.py --config configs/cogvideox_5b.yaml
 ```
 
+### Stage 3. Real oracle upper-bound runs
+
+These configs disable planner usage and keep the minimal scene hint, so you can test whether direct structural conditioning helps the pretrained backbone before relying on the learned planner.
+
+CogVideoX 2B real oracle run:
+
+```bash
+python scripts/train.py --config configs/cogvideox_2b_real_oracle_minimal.yaml
+```
+
+CogVideoX 5B real oracle run:
+
+```bash
+python scripts/train.py --config configs/cogvideox_5b_real_oracle_minimal.yaml
+```
+
 ## Important planner note
 
-The main experiment configs now already contain a `planner.checkpoint` field.
+The main experiment configs contain a `planner.checkpoint` field.
 
 That means validation prompt-only generation will:
 
@@ -181,6 +223,42 @@ Optional sidecars under `--sidecar-root`:
 - `*_flow.npy`
 - `*_occlusion.npy`
 
+## Check real manifests before training
+
+Use the checker before any real-data run:
+
+```bash
+python scripts/check_manifest_sidecars.py \
+  --manifest data/train.jsonl \
+  --root-dir . \
+  --num-frames 12 \
+  --image-size 64 \
+  --max-objects 3
+```
+
+Run the same command on `data/val.jsonl`.
+
+## Evaluate real-manifest experiments
+
+To compare oracle-conditioned and prompt-only behavior on held-out real data:
+
+```bash
+python scripts/evaluate_real_manifest.py \
+  --config configs/cogvideox_2b.yaml \
+  --checkpoint outputs/cogvideox_2b/checkpoints/last.pt \
+  --limit 32
+```
+
+You can override the planner checkpoint at evaluation time:
+
+```bash
+python scripts/evaluate_real_manifest.py \
+  --config configs/cogvideox_2b.yaml \
+  --checkpoint outputs/cogvideox_2b/checkpoints/last.pt \
+  --planner-checkpoint outputs/planner_real/checkpoints/last.pt \
+  --limit 32
+```
+
 ## Planner-driven sampling
 
 After both a video model checkpoint and a planner checkpoint exist, planner-driven prompt-only sampling can be run with:
@@ -204,7 +282,7 @@ The code is now organized so that the custom research logic is split into two ex
 In other words, the intended full system is:
 
 ```text
-prompt -> learned planner -> scene hint -> video diffusion model
+prompt -> learned planner -> minimal scene hint -> video diffusion model
 ```
 
 The backbone, tokenizer, VAE, and scheduler are still intended to be reused from CogVideoX whenever the heavyweight path is used.
