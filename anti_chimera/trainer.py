@@ -13,7 +13,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from anti_chimera.data.manifest import ManifestVideoDataset
-from anti_chimera.data.scene_hint import SceneHintBuilder
+from anti_chimera.data.scene_hint_modes import build_scene_hint_builder
 from anti_chimera.data.synthetic_collision import SyntheticCollisionDataset
 from anti_chimera.inference import sample_video
 from anti_chimera.inference_with_planner import sample_video_with_planner
@@ -36,7 +36,7 @@ def collate_fn(batch):
     return out
 
 
-def build_batch_cond(batch: Dict, builder: SceneHintBuilder) -> torch.Tensor:
+def build_batch_cond(batch: Dict, builder) -> torch.Tensor:
     conds = []
     B = batch['video'].shape[0]
     for i in range(B):
@@ -206,7 +206,7 @@ def build_datasets(config: Dict):
 def _val_loss(
     model: AntiChimeraVideoDiffusion,
     val_loader: DataLoader,
-    builder: SceneHintBuilder,
+    builder,
     device: torch.device,
     train_cfg: Dict,
     limit_batches: int | None = None,
@@ -295,11 +295,7 @@ def train(config: Dict, resume_checkpoint: str | None = None) -> None:
     if str(model_cfg.get('backend', 'lite3d')) == 'cogvideox':
         torch.backends.cudnn.enabled = False
 
-    builder = SceneHintBuilder(
-        max_objects=int(data_cfg['max_objects']),
-        depth_bins=int(data_cfg['depth_bins']),
-        image_size=int(data_cfg['image_size']),
-    )
+    builder = build_scene_hint_builder(data_cfg)
     cond_channels = builder.num_channels()
     model = AntiChimeraVideoDiffusion(cond_channels=cond_channels, **model_cfg).to(device)
 
@@ -350,6 +346,7 @@ def train(config: Dict, resume_checkpoint: str | None = None) -> None:
         f.write(f'- output_dir: `{out_dir}`\n')
         f.write(f'- train_size: `{len(train_ds)}`\n')
         f.write(f'- val_size: `{len(val_ds)}`\n')
+        f.write(f'- scene_hint_mode: `{data_cfg.get("scene_hint_mode", "minimal")}`\n')
         f.write(f'- max_steps: `{max_steps or "unbounded"}`\n')
         f.write(f'- condition_dropout_prob: `{condition_dropout_prob}`\n')
         f.write(f'- prompt_dropout_prob: `{prompt_dropout_prob}`\n\n')
@@ -375,7 +372,6 @@ def train(config: Dict, resume_checkpoint: str | None = None) -> None:
             prompts = _maybe_drop_prompts(batch['caption'], prompt_dropout_prob)
             cond = build_batch_cond(batch, builder).float().to(device)
             cond = _maybe_drop_condition(cond, condition_dropout_prob)
-
             with torch.no_grad():
                 latents = model.encode_video(videos)
             B = latents.shape[0]
@@ -383,25 +379,21 @@ def train(config: Dict, resume_checkpoint: str | None = None) -> None:
             noise = torch.randn_like(latents)
             noisy_latents = model.add_noise(latents, noise, t)
             target = model.prediction_target(latents, noise, t)
-
             optimizer.zero_grad(set_to_none=True)
             with autocast(enabled=bool(train_cfg.get('amp', False)) and device.type == 'cuda'):
                 pred = model(noisy_latents, t, prompts, cond)
                 loss = _weighted_mse_loss(pred, target, model, t, train_cfg)
-
             scaler.scale(loss).backward()
             if grad_clip is not None:
                 scaler.unscale_(optimizer)
                 torch.nn.utils.clip_grad_norm_(model.parameters(), float(grad_clip))
             scaler.step(optimizer)
             scaler.update()
-
             global_step += 1
             if ema_state is not None and global_step >= ema_start_step:
                 _update_ema_state(ema_state, model, ema_decay)
             running_losses.append(loss.item())
             pbar.set_postfix(loss=f'{loss.item():.4f}', step=global_step)
-
             if max_steps and global_step >= max_steps:
                 break
 
@@ -413,14 +405,7 @@ def train(config: Dict, resume_checkpoint: str | None = None) -> None:
 
         chimera_metrics = None
         prompt_only_metrics = None
-        ckpt = {
-            'model': model.state_dict(),
-            'optimizer': optimizer.state_dict(),
-            'config': config,
-            'epoch': epoch,
-            'step': global_step,
-            'backend': model_cfg.get('backend', 'lite3d'),
-        }
+        ckpt = {'model': model.state_dict(), 'optimizer': optimizer.state_dict(), 'config': config, 'epoch': epoch, 'step': global_step, 'backend': model_cfg.get('backend', 'lite3d')}
         if ema_state is not None:
             ckpt['ema_model'] = ema_state
         torch.save(ckpt, ckpt_dir / 'last.pt')
@@ -431,10 +416,8 @@ def train(config: Dict, resume_checkpoint: str | None = None) -> None:
             with torch.no_grad():
                 batch = next(iter(val_loader))
                 preview = normalize_video(batch['video'][0])
-                target_gif = sample_dir / f'epoch_{epoch:03d}_target.gif'
-                target_png = sample_dir / f'epoch_{epoch:03d}_target.png'
-                save_gif(preview, target_gif)
-                save_video_png(preview, target_png)
+                save_gif(preview, sample_dir / f'epoch_{epoch:03d}_target.gif')
+                save_video_png(preview, sample_dir / f'epoch_{epoch:03d}_target.png')
                 prompt = batch['caption'][0]
                 preview_cond = build_batch_cond(batch, builder).float().to(device)[:1]
                 backup_state = _clone_state_dict(model.state_dict(), keys=set(ema_state.keys())) if ema_state is not None else None
@@ -447,35 +430,14 @@ def train(config: Dict, resume_checkpoint: str | None = None) -> None:
                     prompt_only = sample_video(model, prompt, config, device, cond=None)
                 if backup_state is not None:
                     _load_state_dict(model, backup_state)
-                sample_gif = sample_dir / f'epoch_{epoch:03d}_sample.gif'
-                sample_png = sample_dir / f'epoch_{epoch:03d}_sample.png'
-                prompt_only_gif = sample_dir / f'epoch_{epoch:03d}_prompt_only.gif'
-                prompt_only_png = sample_dir / f'epoch_{epoch:03d}_prompt_only.png'
-                save_gif(generated * 2 - 1, sample_gif)
-                save_video_png(generated * 2 - 1, sample_png)
-                save_gif(prompt_only * 2 - 1, prompt_only_gif)
-                save_video_png(prompt_only * 2 - 1, prompt_only_png)
-                chimera_metrics = compute_chimera_metrics(
-                    target_video=batch['video'][0].float(),
-                    generated_video=generated.float(),
-                    tracks=batch['tracks'][0].float(),
-                    visibility=batch['visibility'][0].float(),
-                )
-                prompt_only_metrics = compute_chimera_metrics(
-                    target_video=batch['video'][0].float(),
-                    generated_video=prompt_only.float(),
-                    tracks=batch['tracks'][0].float(),
-                    visibility=batch['visibility'][0].float(),
-                )
+                save_gif(generated * 2 - 1, sample_dir / f'epoch_{epoch:03d}_sample.gif')
+                save_video_png(generated * 2 - 1, sample_dir / f'epoch_{epoch:03d}_sample.png')
+                save_gif(prompt_only * 2 - 1, sample_dir / f'epoch_{epoch:03d}_prompt_only.gif')
+                save_video_png(prompt_only * 2 - 1, sample_dir / f'epoch_{epoch:03d}_prompt_only.png')
+                chimera_metrics = compute_chimera_metrics(target_video=batch['video'][0].float(), generated_video=generated.float(), tracks=batch['tracks'][0].float(), visibility=batch['visibility'][0].float())
+                prompt_only_metrics = compute_chimera_metrics(target_video=batch['video'][0].float(), generated_video=prompt_only.float(), tracks=batch['tracks'][0].float(), visibility=batch['visibility'][0].float())
 
-        metrics = {
-            'epoch': epoch,
-            'step': global_step,
-            'train_loss': avg_train_loss,
-            'val_loss': val_loss,
-            'val_loss_low_t': val_low_t_loss,
-            'val_loss_high_t': val_high_t_loss,
-        }
+        metrics = {'epoch': epoch, 'step': global_step, 'train_loss': avg_train_loss, 'val_loss': val_loss, 'val_loss_low_t': val_low_t_loss, 'val_loss_high_t': val_high_t_loss}
         if chimera_metrics is not None:
             metrics.update({f'chimera/oracle/{k}': v for k, v in chimera_metrics.items()})
         if prompt_only_metrics is not None:
