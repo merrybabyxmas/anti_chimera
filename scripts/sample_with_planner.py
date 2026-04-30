@@ -11,6 +11,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from anti_chimera.config import load_config
+from anti_chimera.data.scene_hint_modes import build_scene_hint_builder
 from anti_chimera.inference_with_planner import sample_video_with_planner
 from anti_chimera.models.model import AntiChimeraVideoDiffusion
 from anti_chimera.utils import default_device, save_gif, save_video_png
@@ -27,12 +28,7 @@ def main() -> None:
 
     config = load_config(args.config)
     device = default_device(config.get('training', {}).get('device', 'cuda'))
-    from anti_chimera.data.scene_hint import SceneHintBuilder
-    builder_channels = SceneHintBuilder(
-        max_objects=int(config['data']['max_objects']),
-        depth_bins=int(config['data']['depth_bins']),
-        image_size=int(config['data']['image_size']),
-    ).num_channels()
+    builder_channels = build_scene_hint_builder(config['data']).num_channels()
     model = AntiChimeraVideoDiffusion(cond_channels=builder_channels, **config['model']).to(device)
     ckpt = torch.load(args.checkpoint, map_location=device)
     model.load_state_dict(ckpt['model'], strict=False)
