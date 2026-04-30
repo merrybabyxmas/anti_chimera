@@ -4,7 +4,7 @@ from typing import Dict
 
 import torch
 
-from anti_chimera.data.scene_hint import SceneHintBuilder
+from anti_chimera.data.scene_hint_modes import build_scene_hint_builder
 from anti_chimera.planner_learned import load_learned_planner
 
 
@@ -24,11 +24,7 @@ def build_planned_condition(prompt: str, config: Dict, device: torch.device, pla
         'flow': planned['flow'],
         'occlusion': planned['occlusion'],
     }
-    builder = SceneHintBuilder(
-        max_objects=int(data_cfg['max_objects']),
-        depth_bins=int(data_cfg['depth_bins']),
-        image_size=H,
-    )
+    builder = build_scene_hint_builder(data_cfg)
     return builder.build(sample).unsqueeze(0).to(device)
 
 
