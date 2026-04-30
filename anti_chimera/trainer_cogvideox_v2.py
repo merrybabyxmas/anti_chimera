@@ -11,7 +11,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from anti_chimera.data.manifest import ManifestVideoDataset
-from anti_chimera.data.scene_hint import SceneHintBuilder
+from anti_chimera.data.scene_hint_modes import build_scene_hint_builder
 from anti_chimera.inference import sample_video
 from anti_chimera.inference_with_planner import sample_video_with_planner
 from anti_chimera.metrics import compute_chimera_metrics
@@ -33,7 +33,7 @@ def _collate_fn(batch):
     return out
 
 
-def _batch_to_condition(batch: Dict, builder: SceneHintBuilder, device: torch.device) -> torch.Tensor:
+def _batch_to_condition(batch: Dict, builder, device: torch.device) -> torch.Tensor:
     conds = []
     for i in range(batch['video'].shape[0]):
         sample = {
@@ -100,11 +100,7 @@ def train(config: Dict, resume_checkpoint: str | None = None) -> None:
         persistent_workers=False,
     )
 
-    builder = SceneHintBuilder(
-        max_objects=int(data_cfg['max_objects']),
-        depth_bins=int(data_cfg['depth_bins']),
-        image_size=int(data_cfg['image_size']),
-    )
+    builder = build_scene_hint_builder(data_cfg)
     model = AntiChimeraVideoDiffusion(cond_channels=builder.num_channels(), **model_cfg).to(device)
 
     trainable_params = [p for p in model.parameters() if p.requires_grad]
@@ -124,6 +120,7 @@ def train(config: Dict, resume_checkpoint: str | None = None) -> None:
         f.write('# CogVideoX conditioner-only training\n\n')
         f.write(f'- trainable_parameters: `{sum(int(p.numel()) for p in trainable_params)}`\n')
         f.write(f'- cond_channels: `{builder.num_channels()}`\n')
+        f.write(f'- scene_hint_mode: `{data_cfg.get("scene_hint_mode", "minimal")}`\n')
         f.write(f'- device: `{device}`\n')
         f.write(f'- planner_checkpoint: `{planner_checkpoint or "none"}`\n')
         f.write('- validation_modes: `oracle_conditioned`, `prompt_only`\n')
@@ -188,18 +185,8 @@ def train(config: Dict, resume_checkpoint: str | None = None) -> None:
             save_video_png(oracle_video * 2 - 1, sample_dir / f'epoch_{epoch:03d}_sample.png')
             save_gif(prompt_only_video * 2 - 1, sample_dir / f'epoch_{epoch:03d}_prompt_only.gif')
             save_video_png(prompt_only_video * 2 - 1, sample_dir / f'epoch_{epoch:03d}_prompt_only.png')
-            oracle_metrics = compute_chimera_metrics(
-                target_video=batch['video'][0].float(),
-                generated_video=oracle_video.float(),
-                tracks=batch['tracks'][0].float(),
-                visibility=batch['visibility'][0].float(),
-            )
-            prompt_only_metrics = compute_chimera_metrics(
-                target_video=batch['video'][0].float(),
-                generated_video=prompt_only_video.float(),
-                tracks=batch['tracks'][0].float(),
-                visibility=batch['visibility'][0].float(),
-            )
+            oracle_metrics = compute_chimera_metrics(target_video=batch['video'][0].float(), generated_video=oracle_video.float(), tracks=batch['tracks'][0].float(), visibility=batch['visibility'][0].float())
+            prompt_only_metrics = compute_chimera_metrics(target_video=batch['video'][0].float(), generated_video=prompt_only_video.float(), tracks=batch['tracks'][0].float(), visibility=batch['visibility'][0].float())
 
         payload = {'epoch': epoch, 'step': global_step, 'train_loss': avg_loss}
         if oracle_metrics is not None:
