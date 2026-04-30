@@ -4,6 +4,7 @@ output_dir: outputs/lite3d_curriculum
 data:
   type: synthetic
   synthetic_difficulty: mixed
+  scene_hint_mode: minimal
   num_frames: 16
   image_size: 64
   max_objects: 3
